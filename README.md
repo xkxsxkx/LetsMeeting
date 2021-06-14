@@ -1,6 +1,7 @@
 # LetsMeeting
 
 ## Base Option
+```
 ✨  Generating Nuxt.js project in LetsMeeting
 ? Project name: LetsMeeting
 ? Programming language: JavaScript
@@ -14,6 +15,7 @@
 ? Development tools: jsconfig.json (Recommended for VS Code if you're not using typescript)
 ? Continuous integration: None
 ? Version control system: Git
+```
 
 ## Build Setup
 
