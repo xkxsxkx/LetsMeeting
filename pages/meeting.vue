@@ -1,53 +1,65 @@
 <template>
   <div class="meeting-container">
-    <v-container>
-      <v-row justify="space-around">
-        <template v-for="(client) in clients">
-          <preview
-            v-if="client!==undefined"
-            :key="client.userId"
-            :client="client"
-            :is-room-admin="clients[0].isRoomAdmin"
-            @fullEvent="fullScreen"
-            @kickEvent="kick"
-            @viewEvent="changeView"
-            @changeStreamEvent="changeStream"
-          />
-        </template>
-      </v-row>
+    <v-main>
       <v-container>
-        <v-main>
-          <div style="text-align: center ;height: calc(100vh - 300px);width: 100%">
-            <video ref="video_full" style="height:100%" muted autoplay playsinline />
-          </div>
-        </v-main>
-        <v-badge>
-          <v-btn value="show">
-            <span v-show="isView">
-              全体禁视
-            </span>
-            <span v-show="!isView">
-              取消禁视
-            </span>
-          </v-btn>
-          <v-btn value="voice">
-            <span v-show="!isMuted">
-              全体禁音
-            </span>
-            <span v-show="isMuted">
-              取消禁音
-            </span></v-btn>
-          <v-btn value="message">
-            <span v-show="!isBan">
-              全体禁言
-            </span>
-            <span v-show="isBan">
-              取消禁言
-            </span>
-          </v-btn>
-        </v-badge>
+        <v-row>
+          <v-cols cols="12">
+            <v-row justify="space-around">
+              <template v-for="(client) in clients">
+                <preview
+                  v-if="client!==undefined"
+                  :key="client.userId"
+                  :client="client"
+                  :is-room-admin="clients[0].isRoomAdmin"
+                  @fullEvent="fullScreen"
+                  @kickEvent="kick"
+                  @viewEvent="changeView"
+                  @changeStreamEvent="changeStream"
+                />
+              </template>
+            </v-row>
+            <v-divider />
+            <v-row>
+              <div style="text-align: center ; height: calc(100vh - 300px); width: 100%">
+                <video ref="video_full" style="height:100%" muted autoplay playsinline />
+              </div>
+            </v-row>
+          </v-cols>
+          <v-divider vertical />
+          <v-col cols="1" />
+          <v-cols cols="4">
+            <v-row>
+              <Chat :receive-msg="receiveMsg" @chatEvent="sendChat" @noticeEvent="notice"/>
+            </v-row>
+            <v-row>
+              <v-btn value="show">
+                <span v-show="isView">
+                  全体禁视
+                </span>
+                <span v-show="!isView">
+                  取消禁视
+                </span>
+              </v-btn>
+              <v-btn value="voice">
+                <span v-show="!isMuted">
+                  全体禁音
+                </span>
+                <span v-show="isMuted">
+                  取消禁音
+                </span></v-btn>
+              <v-btn value="message">
+                <span v-show="!isBan">
+                  全体禁言
+                </span>
+                <span v-show="isBan">
+                  取消禁言
+                </span>
+              </v-btn>
+            </v-row>
+          </v-cols>
+        </v-row>
       </v-container>
-    </v-container>
+    </v-main>
     <v-dialog
       v-model="dialogFormVisible"
       title="请输入房间号和密码: "
@@ -115,10 +127,11 @@
 <script>
 import { adapter, io } from 'webrtc-adapter'
 import Preview from './meeting-components/Preview.vue'
+import Chat from './meeting-components/Chat.vue'
 
 export default {
   name: 'Meeting',
-  components: { Preview },
+  components: { Preview, Chat },
   data () {
     const valiRoomId = (rule, value, callback) => {
       if (value === '') {
