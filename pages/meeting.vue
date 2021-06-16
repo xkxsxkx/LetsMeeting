@@ -25,7 +25,6 @@
               </div>
             </v-row>
           </v-cols>
-          <v-divider vertical />
           <v-col cols="1" />
           <v-cols cols="4">
             <v-row>
@@ -54,6 +53,9 @@
                 <span v-show="isBan">
                   取消禁言
                 </span>
+              </v-btn>
+              <v-btn value="leave" @click="leave">
+                离开
               </v-btn>
             </v-row>
           </v-cols>
@@ -97,6 +99,13 @@
         </v-card-text>
         <v-card-actions>
           <v-spacer />
+          <v-radio-group
+            v-model="roomFromDate.radio"
+            row
+          >
+            <v-radio label="摄像头" value="1" />
+            <v-radio label="电脑屏幕" value="2" />
+          </v-radio-group>
           <v-btn
             color="darken-1"
             text
@@ -125,9 +134,10 @@
 </template>
 
 <script>
-import { adapter, io } from 'webrtc-adapter'
+import io from 'socket.io-client'
 import Preview from './meeting-components/Preview.vue'
 import Chat from './meeting-components/Chat.vue'
+// import socket from '~/plugins/socket.io.js'
 
 export default {
   name: 'Meeting',
@@ -146,6 +156,8 @@ export default {
     }
     return {
       meetingId: '0',
+      state: 'init',
+      pc: null,
       dialogFormVisible: true,
       localWebsocket: undefined,
       wsUrl: undefined,
@@ -155,6 +167,8 @@ export default {
       isView: true,
       isMuted: false,
       fullScreenId: '',
+      roomId: '',
+      offerdesc: null,
       clients: [{
         userId: '0',
         nickname: '未连接',
@@ -165,11 +179,11 @@ export default {
         view: true,
         chat: true,
         isSelf: true,
-        isRoomAdmin: true,
+        isRoomAdmin: false,
         nowStream: 'screen'
       },
       {
-        userId: '0',
+        userId: '1',
         nickname: '未连接',
         roomId: '0',
         localStream: undefined,
@@ -195,16 +209,30 @@ export default {
         roomPw: [
           { validator: valiRoomId, trigger: 'blur' }
         ]
+      },
+      pcConfig: {
+        iceServers: [
+          {
+            urls: 'stun:stun.l.google.com:19302'
+          },
+          {
+            urls: 'turn:207.246.74.80:3478',
+            credential: 'maixiquan123',
+            username: 'maixiquan'
+          }]
       }
     }
   },
   computed: {
   },
-  mounted () {
+  beforeMount () {
+  },
+  async mounted () {
     this.dialogFormVisible = true
     this.roomFromDate.nickname = this.name
     try {
-      // await this.initLocalWebsocket()
+      await this.startv()
+      await this.initLocalWebsocket()
     } catch (e) {
       console.log('websoccket error: ' + e.message)
       this.$message.error('net connect error!')
@@ -222,28 +250,228 @@ export default {
     }
   },
   methods: {
-    async startv () {
-      // camera
-      console.log(adapter.browserDetails.browser)
-      const audioStream1 = await navigator.mediaDevices.getUserMedia({ audio: true, video: true })
-      console.log('摄像头设置')
-      const c01 = {
-        userId: '0',
-        roomId: '0',
-        nickname: '未连接',
-        localStream: audioStream1,
-        peerConnection: undefined,
-        muted: false,
-        view: true,
-        chat: true,
-        isSelf: true,
-        isRoomAdmin: false,
-        nowStream: 'screen'
+    isPc () {
+      const userAgentInfo = navigator.userAgent
+      const Agents = ['Android', 'iPhone', 'SymbianOS', 'Windows Phone', 'iPad', 'iPod']
+      let flag = true
+
+      for (let v = 0; v < Agents.length; v++) {
+        if (userAgentInfo.indexOf(Agents[v]) > 0) {
+          flag = false
+          break
+        }
       }
-      this.$set(this.clients, 0, c01)
-      console.log('本地流')
-      console.log(this.clients[0].localStream)
-      console.log('本地摄像头设置成功')
+      return flag
+    },
+    is_android () {
+      const u = navigator.userAgent
+      // const app = navigator.appVersion
+      const isAndroid = u.includes('Android') > -1 || u.includes('Linux') > -1 // g
+      const isIOS = !!u.match(/\(i[^;]+;( U;)? CPU.+Mac OS X/) // ios终端
+      if (isAndroid) {
+        // 这个是安卓操作系统
+        return true
+      }
+      if (isIOS) {
+        // 这个是ios操作系统
+        return false
+      }
+    },
+    initLocalWebsocket () {
+      console.log('初始化weosocket')
+      // const response = await getUrl()
+      // this.wsUrl = response.data
+      // console.log('获取到wsurl:' + this.wsUrl)
+      // this.localWebsocket = new WebSocket(this.wsUrl)
+      this.localWebsocket = io.connect()
+      this.localWebsocket.on('joined', (roomid, id) => {
+        this.state = 'joined'
+        this.createPeerConnection()
+        this.bindTracks()
+      })
+      this.localWebsocket.on('otherjoin', (roomid) => {
+        if (this.state === 'joined_unbind') {
+          this.createPeerConnection()
+          this.bindTracks()
+        }
+        this.state = 'joined_conn'
+        this.call()
+        console.log('recerive other_join message, state=', this.state)
+      })
+      this.localWebsocket.on('full', (roomid, id) => {
+        console.log('receive full message', roomid, id)
+        this.hangup()
+        this.stopV()
+        this.state = 'leaved'
+        console.log('receive full message, state=', this.state)
+        alert('the room is full!')
+      })
+      this.localWebsocket.on('leave', (roomid, id) => {
+        console.log('receive leaved message', roomid, id)
+        this.state = 'leaved'
+        this.localWebsocket.disconnnect()
+        console.log('receive leaved message, start=', this.state)
+      })
+      this.localWebsocket.on('bye', (roomid, id) => {
+        this.state = 'joined_unbind'
+        this.hangup()
+        this.receiveMsg = ''
+        console.log('receive bye message,, start=', this.state)
+      })
+      this.localWebsocket.on('disconnect', (socket) => {
+        console.log('receive disconnect message!', this.roomid)
+        if (!(this.state === 'leaved')) {
+          this.hangup()
+          this.stopV()
+        }
+        this.state = 'leaved'
+      })
+      this.localWebsocket.on('message', (roomid, data) => {
+        console.log('receive message!', roomid, data)
+        if (data === null || data === undefined) {
+          console.error('the message is invalid!')
+          return
+        }
+        if (Object.prototype.hasOwnProperty.call(data, 'type') && data.type === 'offer') {
+          this.receiveMsg = data.sdp
+          this.pc.setRemoteDescription(new RTCSessionDescription(data))
+
+          // create answer
+          this.pc.createAnswer()
+            .then(this.getAnswer)
+            .catch(this.handleAnswerError)
+        } else if (Object.prototype.hasOwnProperty.call(data, 'type') && data.type === 'answer') {
+          // answer.value = data.sdp
+          this.pc.setRemoteDescription(new RTCSessionDescription(data))
+        } else if (Object.prototype.hasOwnProperty.call(data, 'type') && data.type === 'candidate') {
+          const candidate = new RTCIceCandidate({
+            sdpMLineIndex: data.label,
+            candidate: data.candidate
+          })
+          this.pc.addIceCandidate(candidate)
+        } else {
+          console.log('the message is invalid!', data)
+        }
+      })
+    },
+    getAnswer (desc) {
+      this.pc.setLocalDescription(desc)
+      this.sendMessage(this.roomid, desc)
+    },
+    handleAnswerError (err) {
+      console.error('Fail to create answer:', err)
+    },
+    call () {
+      if (this.state === 'joined_conn') {
+        const offerOptions = {
+          offerToRecieveAudio: 1,
+          offerToRecieveVideo: 1
+        }
+        this.pc.createOffer(offerOptions).then(this.getOffer)
+      }
+    },
+    getOffer (desc) {
+      this.pc.setLocalDescription(desc)
+      this.receiveMsg += desc.sdp
+      this.offerdesc = desc
+      this.sendMessage(this.roomid, this.offerdesc)
+    },
+    bindTracks () {
+      if (this.pc === null || this.pc === undefined) {
+        console.error('pc is null or undefine')
+        return
+      }
+      if (this.clients[0].localStream === null || this.clients[0].localStream === undefined) {
+        console.error('localstream is null or nudefined!')
+        return
+      }
+      this.clients[0].localStream.getTracks().forEach(
+        (track) => {
+          this.pc.addTrack(track, this.clients[0].localStream)
+        }
+      )
+    },
+    createPeerConnection () {
+      if (!this.pc) {
+        this.pc = new RTCPeerConnection(this.pcConfig)
+        this.pc.onicecandidate = (e) => {
+          if (e.candidate) {
+            this.sendMessage(this.roomid, {
+              type: 'candidate',
+              label: event.candidate.sdpMLineIndex,
+              id: event.candidate.sdpMid,
+              candidate: event.candidate.candidate
+            })
+          } else {
+            console.log('this is the end candidate')
+          }
+        }
+        this.pc.ontrack = this.getRemoteStream
+      } else {
+        console.warning('the pc have be created!')
+      }
+    },
+    sendMessage (roomid, data) {
+      console.log('send message to other end', roomid, data)
+      if (!this.localWebsocket) {
+        console.log('socket is null')
+      } else {
+        this.localWebsocket.emit('message', roomid, data)
+      }
+    },
+    hangup () {
+      if (this.pc) {
+        this.offerdesc = null
+        this.pc.close()
+        this.pc = null
+      }
+    },
+    async startv () {
+      if (!navigator.mediaDevices ||
+        !navigator.mediaDevices.getUserMedia) {
+        console.error('the getUserMedia is not supported!')
+      } else {
+        let constraints
+        if (this.radio === '1' && this.shareDesk()) {
+          constraints = {
+            video: false,
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          }
+        } else {
+          constraints = {
+            video: true,
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          }
+        }
+        // camera
+        const audioStream1 = await navigator.mediaDevices.getUserMedia(constraints)
+        console.log('摄像头设置')
+        const c01 = {
+          userId: '0',
+          roomId: '0',
+          nickname: '未连接',
+          localStream: audioStream1,
+          peerConnection: undefined,
+          muted: false,
+          view: true,
+          chat: true,
+          isSelf: true,
+          isRoomAdmin: false,
+          nowStream: 'screen'
+        }
+        this.$set(this.clients, 0, c01)
+        console.log('本地流')
+        console.log(this.clients[0].localStream)
+        console.log('本地摄像头设置成功')
+      }
     },
     stopV () {
       this.clients[0].localStream.getTracks().forEach(function (track) {
@@ -280,62 +508,6 @@ export default {
         this.clients[0].nowStream = 'screen'
       }
     },
-    ban (userId) {
-      console.log('ban:' + userId)
-      if (userId === '') { // 全体禁言
-        if (this.isBan) { // 恢复
-          const msg = new MessageModel(TYPE_COMMAND_BAN, this.roomFromDate.roomId, 'false', '')
-          this.wsSend(msg)
-        } else {
-          // 全体禁言
-          const msg = new MessageModel(TYPE_COMMAND_BAN, this.roomFromDate.roomId, 'true', '')
-          this.wsSend(msg)
-        }
-      } else if (this.clients[userId].chat) {
-        const msg = new MessageModel(TYPE_COMMAND_BAN, this.roomFromDate.roomId, 'true', userId)
-        this.wsSend(msg)
-      } else { // 全员发送chat开启
-        const msg = new MessageModel(TYPE_COMMAND_BAN, this.roomFromDate.roomId, 'false', userId)
-        this.wsSend(msg)
-      }
-    },
-    changeMicro (userId) {
-      console.log('changeMicro:' + userId)
-      if (userId === '') {
-        if (this.isMuted) {
-          const msg = new MessageModel(TYPE_COMMAND_MUTED, this.roomFromDate.roomId, 'false', '')
-          this.wsSend(msg)
-        } else {
-          const msg = new MessageModel(TYPE_COMMAND_MUTED, this.roomFromDate.roomId, 'true', '')
-          this.wsSend(msg)
-        }
-      } else if (userId === this.clients[0].userId) {
-        if (this.clients[0].muted) {
-          // 打开麦克风
-          const msg = new MessageModel(TYPE_COMMAND_MUTED, this.roomFromDate.roomId, 'false', this.clients[0].userId)
-          this.wsSend(msg)
-        } else {
-          // 关闭麦克风
-          const msg = new MessageModel(TYPE_COMMAND_MUTED, this.roomFromDate.roomId, 'true', this.clients[0].userId)
-          this.wsSend(msg)
-        }
-      } else if (this.clients[0].isRoomAdmin) { // 别人
-        // 自己是管理员，就要彻底开关他的麦克风
-        if (this.clients[Number(userId)].muted) {
-          // 通知所有人打开此人麦克风
-          const msg = new MessageModel(TYPE_COMMAND_MUTED, this.roomFromDate.roomId, 'false', userId)
-          this.wsSend(msg)
-        } else {
-          // 通知所有人关闭此人麦克风
-          const msg = new MessageModel(TYPE_COMMAND_MUTED, this.roomFromDate.roomId, 'true', userId)
-          this.wsSend(msg)
-        }
-      } else if (this.clients[Number(userId)].muted) {
-        this.clients[Number(userId)].muted = false
-      } else {
-        this.clients[Number(userId)].muted = true
-      }
-    },
     fullScreen (userId) {
       console.log('fullScreen:' + userId)
       if (userId === this.clients[0].userId) {
@@ -350,25 +522,6 @@ export default {
       console.log('kick:' + userId)
       const msg = new MessageModel(TYPE_COMMAND_KICK, this.roomFromDate.roomId, '', userId)
       this.wsSend(msg)
-    },
-    initLocalWebsocket () {
-      console.log('初始化weosocket')
-      // const response = await getUrl()
-      // this.wsUrl = response.data
-      // console.log('获取到wsurl:' + this.wsUrl)
-      // this.localWebsocket = new WebSocket(this.wsUrl)
-      this.localWebsocket = io()
-      this.localWebsocket.onmessage = this.wseReceiveMessage
-      this.localWebsocket.onopen = () => {
-        console.log('localWebsocket打开')
-      }
-      this.localWebsocket.onerror = () => {
-        console.log('localWebsocket错误')
-        // 重连？
-      }
-      this.localWebsocket.onclose = (e) => {
-        console.log('localWebsocket关闭' + e)
-      }
     },
     createOrEnterRoom (method) { // 进入房间
       this.$refs.romeForm.validate((valid) => {
@@ -388,9 +541,21 @@ export default {
           return false
         }
       })
+      this.connSignalServer()
+    },
+    connSignalServer () {
+      this.startv()
+      this.dialogFormVisible = false
     },
     wsSend (data) { // 数据发送
       this.localWebsocket.send(JSON.stringify(data))
+    },
+    leave () {
+      if (this.localWebsocket) {
+        this.localWebsocket.emit('leave', this.roomId)
+      }
+      this.hangup()
+      this.stopV()
     }
   }
 }
@@ -407,23 +572,12 @@ class MessageModel {
 }
 
 const TYPE_COMMAND_KICK = 'KICK'
-const TYPE_COMMAND_MUTED = 'MUTED'
-const TYPE_COMMAND_BAN = 'BAN'
 const TYPE_COMMAND_ROOM_ENTER = 'enterRoom'
 const TYPE_COMMAND_ROOM_CREATE = 'createRoom'
-/*
-const TYPE_COMMAND_VIEW = 'VIEW'
-const TYPE_COMMAND_READY = 'ready'
-const TYPE_COMMAND_OFFER = 'offer'
-const TYPE_COMMAND_ANSWER = 'answer'
-const TYPE_COMMAND_CANDIDATE = 'candidate'
-
-const TYPE_COMMAND_ERROR = 'error'
-const TYPE_COMMAND_SUCCESS = 'success'
-const TYPE_COMMAND_CHAT = 'chat'
 
 // const TYPE_COMMAND_SIGN = 'SIGN'
 
+/*
 const iceServers = {
   'iceServers': [
     { url: 'stun:stun.ekiga.net' },
